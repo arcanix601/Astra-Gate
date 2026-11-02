@@ -1,4 +1,5 @@
 <Project>
+  <Sdk Name="PublishWithSatoriGC" Version="11.0.1-satori.43688079600.1" />
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <LangVersion>latest</LangVersion>
@@ -11,6 +12,7 @@
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1905</WarningsNotAsErrors>
     <InvariantGlobalization>false</InvariantGlobalization>
     <Version>0.15.2</Version>
+    <Features>runtime-async=on</Features>
     <Authors>Astra</Authors>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <!-- Coding conventions live in .editorconfig; this makes `dotnet build` enforce the rules set to
