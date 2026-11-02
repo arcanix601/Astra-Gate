@@ -15,6 +15,7 @@ using Astra.Gateway.Protocol;
 using Astra.Providers.Subscription;
 using Astra.Providers.Templates;
 using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.IO;
 
 namespace Astra.Server.Api;
 
@@ -59,6 +60,7 @@ public sealed class ProviderTestRun(ApiProtocol protocol, string modelId, Func<P
 public sealed class ProviderProbe(AstraDatabase db, IHttpClientFactory http, UpstreamAuthResolver auth,
     EffectiveModelResolver models, SettingsService settings, UsageWriter writer, CodecRegistry codecs,
     PrivacyGuardService privacy, BodyStore bodies, Astra.Plugins.Host.PluginFetchHandler pluginTransport,
+    RecyclableMemoryStreamManager manager,
     Astra.Plugins.Host.PluginProviders pluginProviders, ILogger<ProviderProbe> logger) : IModelProtocolResolver
 {
     public const string HttpClientName = "astra-provider-probe";
@@ -515,7 +517,7 @@ public sealed class ProviderProbe(AstraDatabase db, IHttpClientFactory http, Ups
     /// An Images API answer: one JSON body whose pictures are replaced by a summary line before anything is kept or
     /// shown; <c>usage</c> is read from it as reported. No picture, or an <c>error</c> object, fails the test.
     /// </summary>
-    private static async Task<JsonObject?> ReadImageAsync(HttpResponseMessage response, Func<string, string> collect,
+    private async Task<JsonObject?> ReadImageAsync(HttpResponseMessage response, Func<string, string> collect,
         Stopwatch sw, EventSink sink, JsonArray? pictures, CancellationToken ct)
     {
         var text = await ReadResponseAsync(response, ct, MaxImageResponseBytes);
@@ -1058,30 +1060,44 @@ public sealed class ProviderProbe(AstraDatabase db, IHttpClientFactory http, Ups
         catch (System.Text.Json.JsonException) { return null; }
     }
 
-    private static async Task<string> ReadResponseAsync(HttpResponseMessage response, CancellationToken ct, int limit = MaxResponseBytes)
+    private async Task<string> ReadResponseAsync(HttpResponseMessage response, CancellationToken ct, int limit = MaxResponseBytes)
     {
         var limitText = $"{limit / (1024 * 1024)} MiB";
         if (response.Content.Headers.ContentLength > limit) throw new AdminApiException(502, $"Upstream response exceeds {limitText}");
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[8192];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+        await using var buffer = manager.GetStream($"{nameof(ProviderProbe)}.{nameof(ReadResponseAsync)}");
+        while (true)
         {
+            var span = buffer.GetMemory(8192);
+            var read = await stream.ReadAsync(span, ct);
+            if (read is 0)
+            {
+                break;
+            }
+
             if (buffer.Length + read > limit) throw new AdminApiException(502, $"Upstream response exceeds {limitText}");
-            buffer.Write(chunk, 0, read);
+
+            buffer.Advance(read);
         }
-        return Encoding.UTF8.GetString(buffer.ToArray());
+        return Encoding.UTF8.GetString(buffer.GetReadOnlySequence());
     }
 
-    private static async Task<string> ReadLimitedAsync(HttpResponseMessage response, int limit, CancellationToken ct)
+    private async Task<string> ReadLimitedAsync(HttpResponseMessage response, int limit, CancellationToken ct)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var memory = new MemoryStream();
-        var buffer = new byte[8192];
-        int read;
-        while (memory.Length < limit && (read = await stream.ReadAsync(buffer, ct)) > 0) memory.Write(buffer, 0, read);
-        return Encoding.UTF8.GetString(memory.GetBuffer(), 0, (int)Math.Min(memory.Length, limit));
+        await using var buffer = manager.GetStream($"{nameof(ProviderProbe)}.{nameof(ReadLimitedAsync)}");
+        while (true)
+        {
+            var span = buffer.GetMemory(8192);
+            var read = await stream.ReadAsync(span, ct);
+            if (buffer.Length >= limit || read is 0)
+            {
+                break;
+            }
+            buffer.Advance(read);
+        }
+
+        return Encoding.UTF8.GetString(buffer.GetReadOnlySequence().Slice(0, Math.Min(buffer.Length, limit)));
     }
 
     private static async Task<int> ReadWithIdleTimeoutAsync(Stream stream, byte[] buffer, CancellationToken ct)

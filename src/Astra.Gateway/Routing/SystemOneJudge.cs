@@ -10,7 +10,7 @@ namespace Astra.Gateway.Routing;
 /// same protocol under their own base URL and model name, so they need no dialect of their own. The grades go in as the
 /// <c>criteria</c> of one <c>choice</c> question; the answer's probabilities and confidence are TypeSafe's.
 /// </summary>
-public sealed class SystemOneJudge(GatewayHttpClients clients) : IRoutingJudge
+public sealed class SystemOneJudge(GatewayHttpClients clients, IJudgeHttp judgeHttp) : IRoutingJudge
 {
     /// <summary>The key of the one question and of its answer.</summary>
     internal const string QuestionId = "grade";
@@ -19,7 +19,7 @@ public sealed class SystemOneJudge(GatewayHttpClients clients) : IRoutingJudge
 
     public async Task<JudgeVerdict> JudgeAsync(JudgeEndpoint endpoint, JudgeQuestion question, CancellationToken ct)
     {
-        var text = await JudgeHttp.PostAsync(clients, JudgeUrls.For(endpoint.BaseUrl, "systemone"), endpoint, BuildRequest(endpoint.Model, question), ct);
+        var text = await judgeHttp.PostAsync(clients, JudgeUrls.For(endpoint.BaseUrl, "systemone"), endpoint, BuildRequest(endpoint.Model, question), ct);
         return ParseResponse(text, question);
     }
 

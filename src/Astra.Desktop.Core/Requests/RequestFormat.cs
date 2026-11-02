@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Astra.Core;
 using Astra.Desktop.Core.Traces;
 
 namespace Astra.Desktop.Core.Requests;
@@ -73,7 +74,7 @@ public static class RequestFormat
         var options = new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream, options)) value.WriteTo(writer);
-        return Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.WrittenSpan);
     }
 
     /// <summary>See <see cref="Pretty(JsonNode?)"/>: text that is JSON is re-indented, anything else is returned unchanged.</summary>
@@ -86,7 +87,7 @@ public static class RequestFormat
             var options = new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
             using var stream = new MemoryStream();
             using (var writer = new Utf8JsonWriter(stream, options)) doc.RootElement.WriteTo(writer);
-            return Encoding.UTF8.GetString(stream.ToArray());
+            return Encoding.UTF8.GetString(stream.WrittenSpan);
         }
         catch (JsonException)
         {

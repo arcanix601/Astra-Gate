@@ -144,7 +144,7 @@ public sealed class BunRuntime
                 zip.Write(buffer, 0, n);
             }
         }
-        if (!Convert.ToHexStringLower(SHA256.HashData(zip.GetBuffer().AsSpan(0, (int)zip.Length))).Equals(want, StringComparison.Ordinal))
+        if (!Convert.ToHexStringLower(SHA256.HashData(zip.WrittenSpan)).Equals(want, StringComparison.Ordinal))
             throw new InvalidDataException("the download's checksum doesn't match the release's");
 
         zip.Position = 0;

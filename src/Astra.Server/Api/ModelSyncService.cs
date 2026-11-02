@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -7,6 +8,7 @@ using Astra.Core;
 using Astra.Core.Billing;
 using Astra.Core.Models;
 using Astra.Data;
+using Microsoft.IO;
 
 namespace Astra.Server.Api;
 
@@ -60,7 +62,7 @@ internal sealed class SyncSnapshot
 /// and user-modified prices are listed with skippedBecauseUserModified=true but never written; apply
 /// rejects instead of overwriting anything that changed since the preview.
 /// </summary>
-public sealed class ModelSyncService(AstraDatabase db, IHttpClientFactory factory)
+public sealed class ModelSyncService(AstraDatabase db, IHttpClientFactory factory, RecyclableMemoryStreamManager manager)
 {
     public const string HttpClientName = "model-sync";
     // The model catalog lives on the official website (astra-gate.si, maintained
@@ -158,16 +160,22 @@ public sealed class ModelSyncService(AstraDatabase db, IHttpClientFactory factor
             if (response.Content.Headers.ContentLength > MaxCatalogBytes)
                 throw new AdminApiException(502, $"Model catalog exceeds {MaxCatalogBytes} bytes");
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
-            using var buffer = new MemoryStream();
-            var chunk = new byte[8192];
-            int read;
-            while ((read = await stream.ReadAsync(chunk, deadline.Token)) > 0)
+            await using var buffer = manager.GetStream($"{nameof(ModelSyncService)}.{nameof(FetchCatalogAsync)}");
+            while (true)
             {
+                var span = buffer.GetMemory(8192);
+                var read = await stream.ReadAsync(span, deadline.Token);
+                if (read is 0)
+                {
+                    break;
+                }
+
                 if (buffer.Length + read > MaxCatalogBytes)
                     throw new AdminApiException(502, $"Model catalog exceeds {MaxCatalogBytes} bytes");
-                buffer.Write(chunk, 0, read);
+
+                buffer.Advance(read);
             }
-            return JsonNode.Parse(Encoding.UTF8.GetString(buffer.ToArray())) as JsonObject
+            return JsonNode.Parse(Encoding.UTF8.GetString(buffer.GetReadOnlySequence())) as JsonObject
                 ?? throw new AdminApiException(502, "Model catalog root must be a JSON object");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

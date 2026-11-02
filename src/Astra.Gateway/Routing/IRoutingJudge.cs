@@ -85,6 +85,7 @@ public static class RoutingJudges
 {
     public static IServiceCollection Register(IServiceCollection services)
     {
+        services.AddSingleton<IJudgeHttp, JudgeHttp>();
         services.AddSingleton<IRoutingJudge, SystemOneJudge>();
         services.AddSingleton<IRoutingJudge, DecisionsJudge>();
         services.AddSingleton<RoutingJudgeRegistry>();

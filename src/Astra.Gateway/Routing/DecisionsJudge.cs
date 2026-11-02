@@ -15,7 +15,7 @@ namespace Astra.Gateway.Routing;
 /// tolerant on purpose (probabilities as a list or a map, confidence optional) so a small difference does not break it.
 /// </para>
 /// </summary>
-public sealed class DecisionsJudge(GatewayHttpClients clients) : IRoutingJudge
+public sealed class DecisionsJudge(GatewayHttpClients clients, IJudgeHttp judgeHttp) : IRoutingJudge
 {
     /// <summary>The <c>name</c> of the one question, to find its answer again.</summary>
     internal const string QuestionName = "grade";
@@ -24,7 +24,7 @@ public sealed class DecisionsJudge(GatewayHttpClients clients) : IRoutingJudge
 
     public async Task<JudgeVerdict> JudgeAsync(JudgeEndpoint endpoint, JudgeQuestion question, CancellationToken ct)
     {
-        var text = await JudgeHttp.PostAsync(clients, JudgeUrls.For(endpoint.BaseUrl, "decisions"), endpoint, BuildRequest(endpoint.Model, question), ct);
+        var text = await judgeHttp.PostAsync(clients, JudgeUrls.For(endpoint.BaseUrl, "decisions"), endpoint, BuildRequest(endpoint.Model, question), ct);
         return ParseResponse(text, question);
     }
 

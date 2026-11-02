@@ -21,6 +21,7 @@ using Astra.Plugins.Middleware;
 using Astra.Providers.Subscription;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.IO;
 
 namespace Astra.Gateway.Pipeline;
 
@@ -52,6 +53,7 @@ public sealed partial class GatewayPipeline(
     ProviderPoolScheduler poolScheduler,
     ProviderHealth health,
     ISmartRouter smartRouter,
+    RecyclableMemoryStreamManager manager,
     ILogger<GatewayPipeline> logger,
     RequestBodyLimits? bodyLimits = null)
 {
@@ -175,7 +177,8 @@ public sealed partial class GatewayPipeline(
             {
                 var middlewareSpan = trace.StartAt(TraceSpanNames.Middleware, middlewareStart);
                 var bytesBefore = requestBody.Utf8.Length;
-                var (changed, reject) = middlewareRun.Request(requestBody.Utf8.ToArray());
+                var changed = requestBody.Utf8;
+                var reject = middlewareRun.Request(ref changed);
                 if (reject is not null)
                 {
                     middlewareSpan.Error("rejected").End();
@@ -880,6 +883,7 @@ public sealed partial class GatewayPipeline(
                     // 上游不收压缩的请求体：本请求剩下的发送都改发原文。
                     attempt = Retry(attempt, response, "compression_rejected", credentials.AccountId ?? accountId);
                     response.Dispose();
+                    await compressed.DisposeAsync();
                     compressed = null;
                     request = Build(credentials);
                     capture?.Set(BodyStore.UpstreamRequestHeaders, DescribeRequest(request));
@@ -1761,14 +1765,22 @@ public sealed partial class GatewayPipeline(
         public void Dispose() => _idle.Dispose();
     }
 
-    private static async Task<string> ReadLimitedAsync(HttpResponseMessage response, int limit, CancellationToken ct)
+    private async Task<string> ReadLimitedAsync(HttpResponseMessage response, int limit, CancellationToken ct)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var memory = new MemoryStream();
-        var buffer = new byte[8192];
-        int read;
-        while (memory.Length < limit && (read = await stream.ReadAsync(buffer, ct)) > 0) memory.Write(buffer, 0, read);
-        return Encoding.UTF8.GetString(memory.GetBuffer(), 0, (int)Math.Min(memory.Length, limit));
+        await using var memory = manager.GetStream($"{nameof(GatewayPipeline)}.{nameof(ReadLimitedAsync)}");
+        while (true)
+        {
+            var span = memory.GetMemory(8192);
+            var read = await stream.ReadAsync(span, ct);
+            if (memory.Length >= limit || read is 0)
+            {
+                break;
+            }
+            memory.Advance(read);
+        }
+
+        return Encoding.UTF8.GetString(memory.GetReadOnlySequence().Slice((int)Math.Min(memory.Length, limit)));
     }
 
     /// <summary>The usage-only chunk produced by our injected stream_options.include_usage (choices empty, usage set).</summary>
@@ -2022,7 +2034,7 @@ public sealed partial class GatewayPipeline(
         public void Set(string part, ReadOnlySpan<byte> body) => _parts[part] = body[..Math.Min(body.Length, BodyStore.MaxBytes)].ToArray();
 
         /// <summary>A capped capture buffer is kept as it is (no copy): nothing writes to it after this.</summary>
-        public void Set(string part, MemoryStream body) => _parts[part] = new ReadOnlyMemory<byte>(body.GetBuffer(), 0, (int)body.Length);
+        public void Set(string part, MemoryStream body) => _parts[part] = body.WrittenMemory;
 
         /// <summary>Kept as a builder: BodyStore writes its chunks without making one string of them.</summary>
         public void Set(string part, StringBuilder body) => _parts[part] = body;

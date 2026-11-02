@@ -269,7 +269,7 @@ public sealed partial class CloudflaredRuntime
         {
             throw new TimeoutException($"no data for {StallTimeout.TotalSeconds:0} s");
         }
-        if (!Convert.ToHexStringLower(SHA256.HashData(data.GetBuffer().AsSpan(0, (int)data.Length))).Equals(want, StringComparison.Ordinal))
+        if (!Convert.ToHexStringLower(SHA256.HashData(data.WrittenSpan)).Equals(want, StringComparison.Ordinal))
             throw new InvalidDataException("the download's checksum doesn't match the release's");
 
         var exe = DownloadedPath;

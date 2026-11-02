@@ -2,6 +2,8 @@ using System.IO.Compression;
 using System.Text.Json.Nodes;
 using Astra.Core;
 using Astra.Core.Models;
+using Microsoft.Extensions.ObjectPool;
+using Microsoft.IO;
 
 namespace Astra.Gateway.Pipeline;
 
@@ -13,6 +15,8 @@ namespace Astra.Gateway.Pipeline;
 /// </summary>
 public static class UpstreamCompression
 {
+    private static readonly RecyclableMemoryStreamManager Manager = new();
+
     /// <summary>Settings key of the coding.</summary>
     public const string SettingKey = "request_compression";
 
@@ -40,28 +44,33 @@ public static class UpstreamCompression
     private static bool IsCoding(string coding) => coding is "zstd" or "gzip" or "br" or "deflate";
 
     /// <summary>The body compressed with <paramref name="coding"/> (zstd at codex-cli's level 3, the rest at Fastest).</summary>
-    public static byte[] Compress(ReadOnlySpan<byte> body, string coding)
+    public static MemoryStream Compress(ReadOnlySpan<byte> body, string coding)
     {
-        if (coding == "zstd")
+        var output = Manager.GetStream($"{nameof(UpstreamCompression)}.{nameof(Compress)}");
+        try
         {
-            using var zstd = new ZstdSharp.Compressor(3);
-            return zstd.Wrap(body).ToArray();
-        }
-        using var output = new MemoryStream();
-        using (Stream encoder = coding switch
-        {
-            "gzip" => new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true),
-            "br" => new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true),
-            // HTTP's "deflate" is the zlib format (RFC 9110 §8.4.1.2).
-            "deflate" => new ZLibStream(output, CompressionLevel.Fastest, leaveOpen: true),
-            _ => throw new ArgumentOutOfRangeException(nameof(coding), coding, null),
-        })
+            using Stream encoder = coding switch
+            {
+                "zstd" => new ZstandardStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                "gzip" => new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                "br" => new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                // HTTP's "deflate" is the zlib format (RFC 9110 §8.4.1.2).
+                "deflate" => new ZLibStream(output, CompressionLevel.Fastest, leaveOpen: true),
+                _ => throw new ArgumentOutOfRangeException(nameof(coding), coding, null),
+            };
             encoder.Write(body);
-        return output.ToArray();
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
+
+        return output;
     }
 
     /// <summary>A JSON request content carrying already-compressed bytes and their <c>Content-Encoding</c>.</summary>
-    public static PooledContent Content(byte[] compressed, string coding)
+    public static PooledContent Content(MemoryStream compressed, string coding)
     {
         var content = new PooledContent(PooledBuffer.Wrap(compressed));
         content.Headers.ContentEncoding.Add(coding);

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using Astra.Core;
 using Astra.Core.Plugins;
@@ -156,10 +156,12 @@ public static class PluginSelfTest
                 MiddlewareRun Begin() => engine.BeginAsync(new MiddlewareInfo("anthropic", "m", true, "/v1/messages", "claude-code"))
                     .AsTask().GetAwaiter().GetResult() ?? throw Fail("no run");
                 MiddlewareReject? reject;
-                using (var run = Begin()) (_, reject) = run.Request(Encoding.UTF8.GetBytes("""{"text":"a secret"}"""));
+                var body = """{"text":"a secret"}"""u8;
+                using (var run = Begin()) reject = run.Request(ref body);
                 using var ok = Begin();
-                var (body, _) = ok.Request(Encoding.UTF8.GetBytes("""{"text":"fine"}"""));
-                var dropped = ok.Event(Encoding.UTF8.GetBytes("event: content_block_delta\ndata: {\"type\":\"drop\"}\n\n"));
+                body = """{"text":"fine"}"""u8;
+                ok.Request(ref body);
+                var dropped = ok.Event("event: content_block_delta\ndata: {\"type\":\"drop\"}\n\n"u8);
                 var ev = dropped is null ? "" : Encoding.UTF8.GetString(dropped);
                 return reject is (400, "has secret") && Encoding.UTF8.GetString(body).Contains("\"calls\":") && ev == ""
                     ? "reject, rewrite and drop through the engine" : throw Fail($"{reject} / {Encoding.UTF8.GetString(body)} / {ev}");

@@ -13,4 +13,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Astra.Core\Astra.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.IO.RecyclableMemoryStream" Version="4.0.1" />
+  </ItemGroup>
 </Project>

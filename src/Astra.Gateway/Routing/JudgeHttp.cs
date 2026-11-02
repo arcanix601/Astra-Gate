@@ -4,9 +4,11 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Astra.Core;
 using Astra.Core.Routing;
 using Astra.Gateway.Pipeline;
 using Astra.Gateway.Protocol;
+using Microsoft.IO;
 
 namespace Astra.Gateway.Routing;
 
@@ -22,13 +24,22 @@ internal static class JudgeUrls
     }
 }
 
+public interface IJudgeHttp
+{
+    /// <summary>
+    /// Posts <paramref name="body"/> and returns the answer's text. The deadline is <see cref="JudgeEndpoint.Timeout"/>,
+    /// or that plus <see cref="JudgeEndpoint.ConnectAllowance"/> when the call has to open its connection first.
+    /// </summary>
+    Task<string> PostAsync(GatewayHttpClients clients, string url, JudgeEndpoint endpoint, JsonObject body, CancellationToken ct);
+}
+
 /// <summary>
 /// The one POST every dialect makes (plan §5.3). It goes through the judge's own client
 /// (<see cref="GatewayHttpClients.ForJudge"/>: long-lived, HTTP/2 when offered), so it honours the outbound proxy
 /// setting, never follows a redirect (the key is not handed to another host) and carries no trace context. The deadline
 /// is this call's own; the client has none.
 /// </summary>
-internal static class JudgeHttp
+internal class JudgeHttp(RecyclableMemoryStreamManager manager) : IJudgeHttp
 {
     private const int MaxResponseBytes = 1024 * 1024;
     private const int MaxMessageChars = 200;
@@ -37,19 +48,16 @@ internal static class JudgeHttp
     /// Posts <paramref name="body"/> and returns the answer's text. The deadline is <see cref="JudgeEndpoint.Timeout"/>,
     /// or that plus <see cref="JudgeEndpoint.ConnectAllowance"/> when the call has to open its connection first.
     /// </summary>
-    public static async Task<string> PostAsync(GatewayHttpClients clients, string url, JudgeEndpoint endpoint, JsonObject body, CancellationToken ct)
+    public async Task<string> PostAsync(GatewayHttpClients clients, string url, JudgeEndpoint endpoint, JsonObject body, CancellationToken ct)
     {
-        var json = new ArrayBufferWriter<byte>(1024);
+        await using var json = manager.GetStream($"{nameof(JudgeHttp)}.{nameof(PostAsync)}");
         GatewayJson.WriteTo(body, json);
-        using var content = new ByteArrayContent(json.WrittenSpan.ToArray());
+        using var content = new ByteArrayContent(json.GetBuffer(), 0, checked((int)json.Length));
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
-        using var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = content,
-            // HTTP/2 where the service offers it: concurrent judgements share the one warm connection.
-            Version = HttpVersion.Version20,
-            VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        request.Content = content; // HTTP/2 where the service offers it: concurrent judgements share the one warm connection.
+        request.Version = HttpVersion.Version20;
+        request.VersionPolicy = HttpVersionPolicy.RequestVersionOrLower;
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         if (!string.IsNullOrEmpty(endpoint.ApiKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
 
@@ -89,29 +97,30 @@ internal static class JudgeHttp
         }
     }
 
-    private static async Task<string> ReadBodyAsync(HttpResponseMessage response, CancellationToken ct)
+    private async Task<string> ReadBodyAsync(HttpResponseMessage response, CancellationToken ct)
     {
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var all = new MemoryStream();
-        var chunk = ArrayPool<byte>.Shared.Rent(8192);
-        try
+        await using var all = manager.GetStream($"{nameof(JudgeHttp)}.{nameof(ReadBodyAsync)}");
+
+        while (true)
         {
-            int read;
-            while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+            var span = all.GetMemory(8192);
+            var read = await stream.ReadAsync(span, ct);
+            if (read is 0)
             {
-                if (all.Length + read > MaxResponseBytes)
-                    throw new RoutingJudgeException(JudgeFailure.BadResponse, "the answer is larger than 1 MiB", (int)response.StatusCode);
-                all.Write(chunk, 0, read);
+                break;
             }
+
+            if (all.Length + read > MaxResponseBytes)
+                throw new RoutingJudgeException(JudgeFailure.BadResponse, "the answer is larger than 1 MiB", (int)response.StatusCode);
+
+            all.Advance(read);
         }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(chunk);
-        }
-        return Encoding.UTF8.GetString(all.GetBuffer(), 0, (int)all.Length);
+
+        return Encoding.UTF8.GetString(all.GetReadOnlySequence());
     }
 
-    private static RoutingJudgeException Failure(HttpStatusCode status, string body)
+    private RoutingJudgeException Failure(HttpStatusCode status, string body)
     {
         var code = (int)status;
         var kind = code switch
@@ -126,7 +135,7 @@ internal static class JudgeHttp
     }
 
     /// <summary>What an error body says, as one short line: its <c>error.message</c> / <c>error</c> / <c>message</c>, else its start.</summary>
-    private static string? Said(string body)
+    private string? Said(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return null;
         string? said = null;

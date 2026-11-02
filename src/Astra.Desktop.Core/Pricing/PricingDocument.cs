@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Astra.Core;
 
 namespace Astra.Desktop.Core.Pricing;
 
@@ -90,7 +91,7 @@ public sealed class PricingDocument
         {
             node.WriteTo(writer);
         }
-        return Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.WrittenSpan);
     }
 
     /// <summary><c>pretty(value)</c> of web/src/lib/format.ts for a JSON node: indented JSON, empty for null.</summary>
@@ -102,7 +103,7 @@ public sealed class PricingDocument
         {
             node.WriteTo(writer);
         }
-        return Encoding.UTF8.GetString(stream.ToArray());
+        return Encoding.UTF8.GetString(stream.WrittenSpan);
     }
 
     /// <summary>

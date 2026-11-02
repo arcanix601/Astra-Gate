@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Headers;
@@ -5,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Astra.Core.Models;
+using Microsoft.IO;
 
 namespace Astra.Providers.Quota;
 
@@ -45,7 +47,7 @@ public sealed record QuotaQueryResult(
 /// thrown, and never change anything about the provider: a balance endpoint that refuses a key says
 /// nothing about whether the key can call models.
 /// </summary>
-public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, QuotaTemplateCatalog catalog, TimeProvider? timeProvider = null)
+public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, QuotaTemplateCatalog catalog, RecyclableMemoryStreamManager manager, TimeProvider? timeProvider = null)
 {
     public const string HttpClientName = "astra-provider-quota";
     public const int MaxResponseBytes = 1 << 20;
@@ -134,7 +136,7 @@ public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, Q
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(config.TimeoutSec));
         HttpStatusCode status;
-        byte[] body;
+        await using var body = manager.GetStream($"{nameof(ProviderQuotaService)}.{nameof(QueryAsync)}");
         bool tooLarge;
         HttpClient? owned = null;
         try
@@ -142,7 +144,7 @@ public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, Q
             var client = provider.HttpProxy is { } proxy ? owned = ProxyClient(proxy) : httpClientFactory.CreateClient(HttpClientName);
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
             status = response.StatusCode;
-            (body, tooLarge) = await ReadLimitedAsync(response, deadline.Token);
+            tooLarge = await ReadLimitedAsync(response, body, deadline.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -159,7 +161,7 @@ public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, Q
 
         var code = (int)status;
         if (tooLarge) return Fail(QuotaErrors.TooLarge, "响应超过 1 MiB，已放弃解析", template.Id, code, shownUrl);
-        var raw = TryParse(body, out var parsed) ? Redact(parsed, secrets) : null;
+        var raw = TryParse(body.GetReadOnlySequence(), out var parsed) ? Redact(parsed, secrets) : null;
         if (code is < 200 or >= 300)
         {
             var upstream = UpstreamMessage(raw) is { } m ? $"：{Truncate(m, 200)}" : "";
@@ -206,28 +208,36 @@ public sealed class ProviderQuotaService(IHttpClientFactory httpClientFactory, Q
         ConnectTimeout = TimeSpan.FromSeconds(15), AutomaticDecompression = DecompressionMethods.All,
     }, disposeHandler: true) { Timeout = TimeSpan.FromSeconds(90) };
 
-    private static async Task<(byte[] Body, bool TooLarge)> ReadLimitedAsync(HttpResponseMessage response, CancellationToken ct)
+    private static async Task<bool> ReadLimitedAsync(HttpResponseMessage response, RecyclableMemoryStream output, CancellationToken ct)
     {
-        if (response.Content.Headers.ContentLength > MaxResponseBytes) return ([], true);
+        if (response.Content.Headers.ContentLength > MaxResponseBytes) return true;
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[16 * 1024];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+        while (true)
         {
-            if (buffer.Length + read > MaxResponseBytes) return ([], true);
-            buffer.Write(chunk, 0, read);
+            var chunk = output.GetMemory(16 * 1024);
+            var read = await stream.ReadAsync(chunk, ct);
+            if (read is 0)
+            {
+                break;
+            }
+            if (output.Length + read > MaxResponseBytes)
+            {
+                return true;
+            }
+            output.Advance(read);
         }
-        return (buffer.ToArray(), false);
+
+        return false;
     }
 
-    private static bool TryParse(byte[] body, [NotNullWhen(true)] out JsonNode? node)
+    private static bool TryParse(ReadOnlySequence<byte> body, [NotNullWhen(true)] out JsonNode? node)
     {
         node = null;
         if (body.Length == 0) return false;
         try
         {
-            node = JsonNode.Parse(body);
+            var r = new Utf8JsonReader(body);
+            node = JsonNode.Parse(ref r);
             return node is not null;
         }
         catch (JsonException)

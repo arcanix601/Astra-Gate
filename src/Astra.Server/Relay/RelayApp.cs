@@ -7,6 +7,7 @@ using Astra.Gateway.Tracing;
 using Astra.Providers.Templates;
 using Astra.Server.Api;
 using Astra.Server.Hosting;
+using Microsoft.IO;
 
 namespace Astra.Server.Relay;
 
@@ -72,6 +73,7 @@ public static class RelayApp
                 live: sp.GetRequiredService<LiveRequestFeed>(), middleware: null, pluginTransport: null, limiter: null,
                 linker: sp.GetRequiredService<TraceLinker>(), pools: null, poolScheduler: sp.GetRequiredService<ProviderPoolScheduler>(),
                 health: sp.GetRequiredService<ProviderHealth>(), smartRouter: runtime, logger: sp.GetRequiredService<ILogger<GatewayPipeline>>(),
+                manager: sp.GetRequiredService<RecyclableMemoryStreamManager>(),
                 bodyLimits: new RequestBodyLimits(options.MaxRequestBodyBytes, TimeSpan.FromSeconds(options.RequestBodyTimeoutSeconds)));
         });
         configure?.Invoke(builder);

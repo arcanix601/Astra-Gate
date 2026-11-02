@@ -126,7 +126,7 @@ public sealed class TomlEditor
         foreach (var item in items)
         {
             var expected = updated;
-            var found = Find(Parse(updated), segments.Concat([item.Key]).ToArray());
+            var found = Find(Parse(updated), [.. segments, item.Key]);
             if (found is null)
                 throw new EditorException($"Self-check failed: '{item.Key}' missing in [{string.Join(".", segments)}] after insert.");
             var v = found.Value.Kv.Value!;

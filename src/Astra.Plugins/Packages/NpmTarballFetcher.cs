@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
+using Astra.Core;
 
 namespace Astra.Plugins.Packages;
 
@@ -58,7 +59,7 @@ public sealed class NpmTarballFetcher(Func<HttpClient> http, string registry = "
                 tgz.Write(buffer, 0, n);
             }
         }
-        Verify(pkg, tgz.GetBuffer().AsSpan(0, (int)tgz.Length));
+        Verify(pkg, tgz.WrittenSpan);
 
         tgz.Position = 0;
         await ExtractAsync(tgz, dest, ct);

@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http;
+using Microsoft.IO;
 
 namespace Astra.Gateway.Pipeline;
 
@@ -18,6 +19,7 @@ namespace Astra.Gateway.Pipeline;
 /// </summary>
 public sealed class PooledBuffer : IBufferWriter<byte>
 {
+    private Stream? _stream;
     private byte[]? _array;
     private readonly bool _pooled;
     private int _refs = 1;
@@ -35,13 +37,28 @@ public sealed class PooledBuffer : IBufferWriter<byte>
         Length = array.Length;
     }
 
+    private PooledBuffer(MemoryStream stream)
+    {
+        _stream = stream;
+        _array = stream.GetBuffer();
+        Length = checked((int)stream.Length);
+    }
+
     /// <summary>Wraps bytes someone else allocated (nothing goes back to the pool).</summary>
+    public static PooledBuffer Wrap(ReadOnlySpan<byte> bytes)
+    {
+        var result = new PooledBuffer(bytes.Length);
+        bytes.CopyTo(result.Array);
+        return result;
+    }
+
     public static PooledBuffer Wrap(byte[] bytes) => new(bytes);
+    public static PooledBuffer Wrap(MemoryStream stream) => new(stream);
 
     /// <summary>UTF-8 of <paramref name="text"/> in a pooled buffer.</summary>
     public static PooledBuffer FromString(string text)
     {
-        var buffer = new PooledBuffer(Encoding.UTF8.GetByteCount(text));
+        var buffer = new PooledBuffer(Encoding.UTF8.GetMaxByteCount(text.Length));
         buffer.Length = Encoding.UTF8.GetBytes(text, buffer.Array);
         return buffer;
     }
@@ -106,7 +123,9 @@ public sealed class PooledBuffer : IBufferWriter<byte>
     {
         if (Interlocked.Decrement(ref _refs) != 0) return;
         var array = Interlocked.Exchange(ref _array, null);
+        var stream = Interlocked.Exchange(ref _stream, null);
         if (array is not null && _pooled) ArrayPool<byte>.Shared.Return(array);
+        stream?.Dispose();
     }
 }
 
@@ -284,7 +303,7 @@ public sealed class RequestBody : IDisposable
         var input = encoded.AsStream();
         await using Stream decoder = coding switch
         {
-            "zstd" => new ZstdSharp.DecompressionStream(input),
+            "zstd" => new ZstandardStream(input, CompressionMode.Decompress),
             "gzip" or "x-gzip" => new GZipStream(input, CompressionMode.Decompress),
             "br" => new BrotliStream(input, CompressionMode.Decompress),
             // HTTP's "deflate" is zlib-wrapped (RFC 9110 §8.4.1.2), but some clients send raw deflate: sniff the header.
@@ -296,7 +315,7 @@ public sealed class RequestBody : IDisposable
         {
             return await ReadAllAsync(decoder, null, maxBytes, ct);
         }
-        catch (Exception ex) when (ex is InvalidDataException or ZstdSharp.ZstdException)
+        catch (Exception ex) when (ex is InvalidDataException)
         {
             throw new GatewayException(400, "invalid_request_error", $"请求体无法按 Content-Encoding: {coding} 解压。");
         }
@@ -309,7 +328,7 @@ public sealed class RequestBody : IDisposable
         new(413, "request_too_large", $"请求体超过 {maxBytes / (1024 * 1024)} MiB。");
 
     /// <summary>Swaps in a new body (a middleware's rewrite); a tree parsed before is no longer valid.</summary>
-    public void Replace(byte[] bytes)
+    public void Replace(ReadOnlySpan<byte> bytes)
     {
         _document?.Dispose();
         _document = null;

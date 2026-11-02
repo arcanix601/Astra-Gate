@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Astra.Core;
 
 namespace Astra.Plugins.Host;
 
@@ -345,7 +346,7 @@ public sealed class PluginHostClient : IAsyncDisposable
                 {
                     if (buffer[i] != (byte)'\n') continue;
                     line.Write(buffer, start, i - start);
-                    Dispatch(line.GetBuffer().AsSpan(0, (int)line.Length));
+                    Dispatch(line.WrittenSpan);
                     line.SetLength(0);
                     // A large reply line (up to MaxWireLine) must not pin that much buffer for the host's lifetime.
                     if (line.Capacity > KeptLineCapacity) line = new MemoryStream();

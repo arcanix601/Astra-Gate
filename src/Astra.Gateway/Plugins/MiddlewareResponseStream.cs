@@ -1,6 +1,9 @@
+using Astra.Core;
 using Astra.Plugins.Middleware;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IO;
 
 namespace Astra.Gateway.Plugins;
 
@@ -25,16 +28,17 @@ public sealed class MiddlewareResponseStream : Stream
     private readonly Stream _inner;
     private readonly MiddlewareRun _run;
     private readonly IHttpResponseBodyFeature _original;
-    private readonly MemoryStream _buffer = new();
+    private readonly RecyclableMemoryStream _buffer;
     private Mode _mode;
     private bool _completed;
 
-    private MiddlewareResponseStream(HttpContext ctx, IHttpResponseBodyFeature original, MiddlewareRun run)
+    private MiddlewareResponseStream(HttpContext ctx, IHttpResponseBodyFeature original, RecyclableMemoryStream buffer, MiddlewareRun run)
     {
         _response = ctx.Response;
         _original = original;
         _inner = original.Stream;
         _run = run;
+        _buffer = buffer;
     }
 
     /// <summary>
@@ -45,7 +49,8 @@ public sealed class MiddlewareResponseStream : Stream
     {
         if (!run.WantsEvents && !run.WantsResponse) return null;
         var original = ctx.Features.Get<IHttpResponseBodyFeature>()!;
-        var stream = new MiddlewareResponseStream(ctx, original, run);
+        var manager = ctx.RequestServices.GetRequiredService<RecyclableMemoryStreamManager>();
+        var stream = new MiddlewareResponseStream(ctx, original, manager.GetStream(nameof(MiddlewareResponseStream)), run);
         ctx.Features.Set<IHttpResponseBodyFeature>(new StreamResponseBodyFeature(stream, original));
         return stream;
     }
@@ -65,11 +70,11 @@ public sealed class MiddlewareResponseStream : Stream
         switch (_mode)
         {
             case Mode.Whole:
-                var body = _run.Response(_buffer.ToArray(), _response.StatusCode);
+                var body = _run.Response(_buffer.WrittenMemory, _response.StatusCode);
                 await _inner.WriteAsync(body, ct);
                 break;
             case Mode.Events when _buffer.Length > 0:
-                await _inner.WriteAsync(_buffer.GetBuffer().AsMemory(0, (int)_buffer.Length), ct);
+                await _inner.WriteAsync(_buffer.WrittenMemory, ct);
                 break;
         }
         _buffer.SetLength(0);
@@ -93,10 +98,10 @@ public sealed class MiddlewareResponseStream : Stream
         var consumed = 0;
         while (true)
         {
-            var held = _buffer.GetBuffer().AsMemory(consumed, (int)_buffer.Length - consumed);
-            var (index, length) = SseEventFramer.EventEnd(held.Span);
+            var held = _buffer.WrittenSpan.Slice(consumed, (int)_buffer.Length - consumed);
+            var (index, length) = SseEventFramer.EventEnd(held);
             if (index < 0) break;
-            var ev = held[..(index + length)].ToArray();
+            var ev = held[..(index + length)];
             consumed += index + length;
             if (_run.Event(ev) is { } output) await _inner.WriteAsync(output, ct);
         }

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using Astra.Plugins.Js;
 using Jint;
@@ -168,7 +168,7 @@ public sealed class MiddlewareRun : IDisposable
     /// returns is what the next is given; undefined leaves it as it was, and so does a hook that throws
     /// or takes too long. A non-null reject is a request a hook turned away.
     /// </summary>
-    public (byte[] Body, MiddlewareReject? Reject) Request(byte[] body)
+    public MiddlewareReject? Request(ref ReadOnlySpan<byte> body)
     {
         for (var i = 0; i < _set.Modules.Count; i++)
         {
@@ -180,19 +180,19 @@ public sealed class MiddlewareRun : IDisposable
                 m.Fail("onRequest", error);
                 continue;
             }
-            if (_rejected is not null) return (body, _rejected);
+            if (_rejected is not null) return _rejected;
             if (output is not null) body = output;
         }
-        return (body, null);
+        return null;
     }
 
     /// <summary>
     /// Runs each onEvent that wants it on one complete event of the stream (with its blank line). Returns
     /// the bytes to write — the event as it was when nothing changed it — or null when a hook dropped it.
     /// </summary>
-    public byte[]? Event(byte[] ev)
+    public byte[]? Event(ReadOnlySpan<byte> ev)
     {
-        if (!SseEventFramer.TrySplit(ev, out var name, out var start, out var end)) return ev;
+        if (!SseEventFramer.TrySplit(ev, out var name, out var start, out var end)) return ev.ToArray();
         byte[]? data = null;
         for (var i = 0; i < _set.Modules.Count; i++)
         {
@@ -203,22 +203,22 @@ public sealed class MiddlewareRun : IDisposable
             if (error is not null) m.Fail("onEvent", error);
             else if (output is not null) data = output;
         }
-        if (data is null) return ev;
+        if (data is null) return ev.ToArray();
         var result = new byte[start + data.Length + (ev.Length - end)];
-        ev.AsSpan(0, start).CopyTo(result);
+        ev.Slice(0, start).CopyTo(result);
         data.CopyTo(result, start);
-        ev.AsSpan(end).CopyTo(result.AsSpan(start + data.Length));
+        ev.Slice(end).CopyTo(result.AsSpan(start + data.Length));
         return result;
     }
 
     /// <summary>Runs each onResponse on a whole JSON reply, with <c>ctx.status</c> set; returns the body to write.</summary>
-    public byte[] Response(byte[] body, int status)
+    public ReadOnlyMemory<byte> Response(ReadOnlyMemory<byte> body, int status)
     {
         for (var i = 0; i < _set.Modules.Count; i++)
         {
             var m = _set.Modules[i];
             if (!m.HasResponse) continue;
-            var (output, error) = Apply(i, Hook.Response, MiddlewareEngine.RequestLimit, body, status);
+            var (output, error) = Apply(i, Hook.Response, MiddlewareEngine.RequestLimit, body.Span, status);
             if (error == Dropped) m.Fail("onResponse", "returned null; a whole reply can't be dropped");
             else if (error is not null) m.Fail("onResponse", error);
             else if (output is not null) body = output;

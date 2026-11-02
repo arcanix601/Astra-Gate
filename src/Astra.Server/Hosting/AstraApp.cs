@@ -17,6 +17,7 @@ using Astra.Server.Alerts;
 using Astra.Server.Api;
 using Astra.Server.Security;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.IO;
 
 namespace Astra.Server.Hosting;
 
@@ -46,7 +47,7 @@ public static class AstraApp
         var database = o.Database ?? AstraDatabase.InitializeAsync(paths).GetAwaiter().GetResult();
 
         var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             Args = [],
             ContentRootPath = AppContext.BaseDirectory,
@@ -76,6 +77,7 @@ public static class AstraApp
         builder.Services.AddSingleton(paths);
         builder.Services.AddSingleton(server);
         builder.Services.AddSingleton(database);
+        builder.Services.AddSingleton<RecyclableMemoryStreamManager>();
         builder.Services.AddSingleton(ClientEnvironment.Real);
         builder.Services.AddSingleton<ClientInstallService>();
         builder.Services.AddHostedService<ClientProbeWarmup>();

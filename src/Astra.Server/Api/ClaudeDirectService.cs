@@ -13,6 +13,7 @@ using Astra.Gateway.Http;
 using Astra.Gateway.Pipeline;
 using Astra.Providers.Subscription;
 using Astra.Server.Hosting;
+using Microsoft.IO;
 
 namespace Astra.Server.Api;
 
@@ -341,7 +342,7 @@ public static class ClaudeDirectEndpoints
         group.MapGet("/accounts/{id}/requests", async (string id, ClaudeDirectService service, CancellationToken ct) =>
             Results.Ok((await service.RequestsAsync(id, ct)).Select(ToDto).ToList()));
 
-        app.MapPost("/telemetry/claude/{id}/v1/logs", async (string id, HttpContext ctx, ClaudeDirectService service, CancellationToken ct) =>
+        app.MapPost("/telemetry/claude/{id}/v1/logs", async (string id, HttpContext ctx, ClaudeDirectService service, RecyclableMemoryStreamManager manager, CancellationToken ct) =>
         {
             RequireLocal(ctx);
             ctx.Response.Headers.CacheControl = "no-store";
@@ -352,17 +353,18 @@ public static class ClaudeDirectEndpoints
                 return Results.StatusCode(415);
             const int maximum = 1_048_576;
             if (ctx.Request.ContentLength > maximum) return Results.StatusCode(413);
-            using var body = new MemoryStream();
-            var buffer = new byte[8192];
-            int read;
+            await using var body = manager.GetStream("/telemetry/claude/{id}/v1/logs");
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
             deadline.CancelAfter(TimeSpan.FromSeconds(15));
             try
             {
-                while ((read = await ctx.Request.Body.ReadAsync(buffer, deadline.Token)) > 0)
+                while (true)
                 {
+                    var buffer = body.GetMemory(8192);
+                    var read = await ctx.Request.Body.ReadAsync(buffer, deadline.Token);
+                    if (read is 0) break;
                     if (body.Length + read > maximum) return Results.StatusCode(413);
-                    body.Write(buffer, 0, read);
+                    body.Advance(read);
                 }
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
