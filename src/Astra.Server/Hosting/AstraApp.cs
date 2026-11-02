@@ -46,7 +46,7 @@ public static class AstraApp
         var database = o.Database ?? AstraDatabase.InitializeAsync(paths).GetAwaiter().GetResult();
 
         var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions
         {
             Args = [],
             ContentRootPath = AppContext.BaseDirectory,

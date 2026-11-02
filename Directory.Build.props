@@ -1,4 +1,5 @@
 <Project>
+  <Sdk Name="PublishWithSatoriGC" Version="11.0.0-satori.42242472725.2" />
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <LangVersion>latest</LangVersion>
@@ -7,6 +8,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <InvariantGlobalization>false</InvariantGlobalization>
     <Version>0.14.3105</Version>
+    <Features>runtime-async=on</Features>
     <Authors>Astra</Authors>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>

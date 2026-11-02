@@ -3,7 +3,6 @@
     <AssemblyName>astra-server</AssemblyName>
     <RootNamespace>Astra.Server</RootNamespace>
     <SelfContained>true</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <UserSecretsId>astra-server</UserSecretsId>
     <!-- AOT analyzer gate (IL2026/IL3050 are errors); does not flow through ProjectReference, so set per project. -->
     <IsAotCompatible>true</IsAotCompatible>
@@ -11,32 +10,6 @@
          Generator, which the SDK auto-enables for AOT publishes. Turn it on
          for plain builds too so the analyzer gate sees the same call sites. -->
     <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
-    <!-- Memory, not throughput: this is a one-user gateway, not a server under load. The Web SDK
-         defaults Server GC on, which gives every core its own heap (10 on a typical Apple Silicon
-         machine): each heap grows to its own peak and reserves 256 MB segments. That — not a leak —
-         was the bulk of astra-server's memory. The same 600 admin requests cost the 0.6.0 release
-         binary 183 MB RSS / 146 MB footprint / 9 segment reservations with Server GC and 105 MB /
-         69 MB / 0 with workstation GC, at 68 requests/s instead of 41; this setting gives 102 MB /
-         66 MB at 98 requests/s. The mode is fixed at publish time — the AOT binary ignores
-         DOTNET_gcServer=1, so switching back is a republish, not a flag. -->
-    <ServerGarbageCollection>false</ServerGarbageCollection>
-  </PropertyGroup>
-  <ItemGroup>
-    <!-- Same reason: compact gen2 and the large-object heap once they fragment, instead of keeping the free space. With the
-         client list's caches in place, 10 polls 10 s apart (the tray's pace) still left the heap at 110 MB, mostly dead,
-         with ~30 MB live (138 MB footprint once idle); with 5 (or 9) it settled at 36 MB (62–70 MB footprint).
-         .agents/memory/clients-endpoint-memory.md has the measurement. AOT compiles this in (ILC's runtimeknob). -->
-    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
-  </ItemGroup>
-  <PropertyGroup Condition="'$(PublishAot)' != 'true'">
-    <PublishSingleFile>true</PublishSingleFile>
-    <PublishReadyToRun>true</PublishReadyToRun>
-    <PublishTrimmed>false</PublishTrimmed>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == ''">
-    <SelfContained>false</SelfContained>
-    <PublishSingleFile>false</PublishSingleFile>
-    <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>
   <ItemGroup>
     <!-- DTOs moved to Astra.Api.Contracts keep working in Server code without a using per file. -->

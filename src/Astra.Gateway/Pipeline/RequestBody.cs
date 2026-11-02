@@ -287,7 +287,7 @@ public sealed class RequestBody : IDisposable
         var input = encoded.AsStream();
         await using Stream decoder = coding switch
         {
-            "zstd" => new ZstdSharp.DecompressionStream(input),
+            "zstd" => new ZstandardStream(input, CompressionMode.Decompress),
             "gzip" or "x-gzip" => new GZipStream(input, CompressionMode.Decompress),
             "br" => new BrotliStream(input, CompressionMode.Decompress),
             // HTTP's "deflate" is zlib-wrapped (RFC 9110 §8.4.1.2), but some clients send raw deflate: sniff the header.
@@ -299,7 +299,7 @@ public sealed class RequestBody : IDisposable
         {
             return await ReadAllAsync(decoder, null, maxBytes, ct);
         }
-        catch (Exception ex) when (ex is InvalidDataException or ZstdSharp.ZstdException)
+        catch (Exception ex) when (ex is InvalidDataException)
         {
             throw new GatewayException(400, "invalid_request_error", $"请求体无法按 Content-Encoding: {coding} 解压。");
         }

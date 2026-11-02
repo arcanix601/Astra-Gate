@@ -42,14 +42,10 @@ public static class UpstreamCompression
     /// <summary>The body compressed with <paramref name="coding"/> (zstd at codex-cli's level 3, the rest at Fastest).</summary>
     public static byte[] Compress(ReadOnlySpan<byte> body, string coding)
     {
-        if (coding == "zstd")
-        {
-            using var zstd = new ZstdSharp.Compressor(3);
-            return zstd.Wrap(body).ToArray();
-        }
         using var output = new MemoryStream();
         using (Stream encoder = coding switch
         {
+            "zstd" => new ZstandardStream(output, CompressionLevel.Fastest, leaveOpen: true),
             "gzip" => new GZipStream(output, CompressionLevel.Fastest, leaveOpen: true),
             "br" => new BrotliStream(output, CompressionLevel.Fastest, leaveOpen: true),
             // HTTP's "deflate" is the zlib format (RFC 9110 §8.4.1.2).
